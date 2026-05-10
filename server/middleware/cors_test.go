@@ -13,12 +13,13 @@ func TestMatchWildcardOrigin(t *testing.T) {
 	}{
 		// Basic wildcard matching
 		{"match subdomain", "https://*.example.com", "https://sub.example.com", true},
-		{"match another subdomain", "https://*.wgfilm21.net", "https://go6.wgfilm21.net", true},
-		{"match alternatif", "https://*.wgfilm21.net", "https://alternatif.wgfilm21.net", true},
+		{"match nested subdomain", "https://*.example.com", "https://a.b.example.com", true},
+		{"match double wildcard", "https://*.*.edu.mx", "https://a.b.edu.mx", true},
+		{"match wildcard with port", "https://*.example.com:8080", "https://sub.example.com:8080", true},
+		{"match wildcard with port mismatch", "https://*.example.com:8080", "https://sub.example.com:8081", false},
 
 		// Should not match
 		{"no match bare domain", "https://*.example.com", "https://example.com", false},
-		{"no match nested subdomain", "https://*.example.com", "https://a.b.example.com", false},
 		{"no match different domain", "https://*.example.com", "https://sub.other.com", false},
 		{"no match different scheme", "https://*.example.com", "http://sub.example.com", false},
 

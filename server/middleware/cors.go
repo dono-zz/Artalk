@@ -49,47 +49,114 @@ func CheckOriginTrusted(app *core.App, origin string) bool {
 }
 
 // matchWildcardOrigin checks if origin matches a wildcard pattern like "https://*.example.com".
-// The wildcard only matches a single subdomain level in the host part.
+// Supports multi-level wildcards (e.g. "*.example.com" matches "a.b.example.com")
+// and multiple wildcards (e.g. "*.*.edu.mx" matches "a.b.edu.mx").
 func matchWildcardOrigin(pattern, origin string) bool {
-	// Pattern must contain "*." in the host part
-	schemeEnd := strings.Index(pattern, "://")
-	if schemeEnd == -1 {
-		return false
-	}
-	patternScheme := pattern[:schemeEnd]
-	patternHost := pattern[schemeEnd+3:]
-
-	if !strings.HasPrefix(patternHost, "*.") {
+	patternScheme, patternHost, patternPort, ok := splitOrigin(pattern)
+	if !ok {
 		return false
 	}
 
-	// Parse the origin
-	originSchemeEnd := strings.Index(origin, "://")
-	if originSchemeEnd == -1 {
+	originScheme, originHost, originPort, ok := splitOrigin(origin)
+	if !ok {
 		return false
 	}
-	originScheme := origin[:originSchemeEnd]
-	originHost := origin[originSchemeEnd+3:]
 
 	// Schemes must match
 	if patternScheme != originScheme {
 		return false
 	}
 
-	// The origin host must end with the wildcard's base domain
-	// e.g. pattern "*.example.com" should match "sub.example.com" but not "example.com" itself
-	baseDomain := patternHost[1:] // ".example.com"
-	if !strings.HasSuffix(originHost, baseDomain) {
+	// Ports must match (normalize default ports)
+	if normalizePort(patternPort, patternScheme) != normalizePort(originPort, originScheme) {
 		return false
 	}
 
-	// The part before the base domain must not contain a dot (single level only)
-	subdomain := originHost[:len(originHost)-len(baseDomain)]
-	if subdomain == "" || strings.Contains(subdomain, ".") {
+	// No wildcard in pattern; let CheckOriginTrusted handle exact matches
+	if !strings.Contains(patternHost, "*") {
 		return false
 	}
 
-	return true
+	return matchWildcardHost(patternHost, originHost)
+}
+
+// splitOrigin splits an origin string into scheme, host, and port.
+// It handles both IPv4/IPv6 hosts. IPv6 addresses are returned with brackets.
+func splitOrigin(s string) (scheme, host, port string, ok bool) {
+	schemeEnd := strings.Index(s, "://")
+	if schemeEnd == -1 {
+		return "", "", "", false
+	}
+	scheme = s[:schemeEnd]
+	rest := s[schemeEnd+3:]
+
+	// Extract port
+	if strings.HasPrefix(rest, "[") {
+		// IPv6 address
+		bracketEnd := strings.Index(rest, "]")
+		if bracketEnd == -1 {
+			return "", "", "", false
+		}
+		host = rest[:bracketEnd+1]
+		if bracketEnd+1 < len(rest) && rest[bracketEnd+1] == ':' {
+			port = rest[bracketEnd+2:]
+		}
+	} else {
+		if colonIdx := strings.LastIndex(rest, ":"); colonIdx != -1 {
+			host = rest[:colonIdx]
+			port = rest[colonIdx+1:]
+		} else {
+			host = rest
+		}
+	}
+
+	return scheme, host, port, true
+}
+
+func normalizePort(port, scheme string) string {
+	if port != "" {
+		return port
+	}
+	switch scheme {
+	case "http":
+		return "80"
+	case "https":
+		return "443"
+	default:
+		return port
+	}
+}
+
+// matchWildcardHost matches a host pattern against a host.
+// The pattern may contain '*' as a wildcard label at the beginning.
+// Each '*' matches one or more labels.
+func matchWildcardHost(patternHost, originHost string) bool {
+	pLabels := strings.Split(patternHost, ".")
+	oLabels := strings.Split(originHost, ".")
+
+	// Match exact suffix labels from the right
+	suffixLen := 0
+	for i := 1; i <= len(pLabels) && i <= len(oLabels); i++ {
+		pIdx := len(pLabels) - i
+		if pLabels[pIdx] == "*" {
+			break
+		}
+		if pLabels[pIdx] != oLabels[len(oLabels)-i] {
+			return false
+		}
+		suffixLen++
+	}
+
+	// The remaining prefix of the pattern must be all wildcards
+	prefixWildcards := len(pLabels) - suffixLen
+	for i := 0; i < prefixWildcards; i++ {
+		if pLabels[i] != "*" {
+			return false
+		}
+	}
+
+	// Each wildcard must match at least one origin label
+	return len(oLabels)-suffixLen >= prefixWildcards
 }
 
 func CheckURLTrusted(app *core.App, targetUrl string) (trusted bool, origin string, err error) {
